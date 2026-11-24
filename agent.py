@@ -84,7 +84,7 @@ def execute(state: State) -> State:
     created_id = None
     for case in state["cases"]:
         started = time.perf_counter()
-        item = {"id": case["id"], "scenario": case["title"], "result": "FAIL"}
+        item = {"id": case["id"], "scenario": case["title"], "result": "FAIL", "failure_type": ""}
         try:
             # Avoid submitting negative payloads that inadvertently match the contract.
             local_errors = list(validator.iter_errors(case["payload"]))
@@ -96,6 +96,8 @@ def execute(state: State) -> State:
                                      timeout=15, allow_redirects=False)
             item["http_status"] = response.status_code
             item["response_excerpt"] = response.text[:500]
+            if response.status_code >= 500:
+                item["failure_type"] = "SERVICE_ERROR"
             if case["positive"]:
                 assert response.status_code == 200, f"Expected 200; received {response.status_code}"
                 body = response.json()
@@ -115,7 +117,12 @@ def execute(state: State) -> State:
                 )
                 item["result"] = "PASS"
                 item["reason"] = "Invalid request rejected with documented 400/422"
-        except (requests.RequestException, AssertionError, ValueError, KeyError) as exc:
+        except requests.RequestException as exc:
+            item["failure_type"] = "TRANSPORT_ERROR"
+            item["reason"] = str(exc)[:800]
+        except (AssertionError, ValueError, KeyError) as exc:
+            if not item["failure_type"]:
+                item["failure_type"] = "CONTRACT_MISMATCH"
             item["reason"] = str(exc)[:800]
         finally:
             item["duration_ms"] = round((time.perf_counter() - started) * 1000)
@@ -161,13 +168,13 @@ def report(state: State) -> State:
     data = {"base_url": BASE, "results": state["results"], "llm_analysis": state["summary"]}
     (OUT / "results.json").write_text(json.dumps(data, indent=2), encoding="utf-8")
     rows = "".join("<tr>" + "".join(f"<td>{html.escape(str(r.get(k, '')))}</td>" for k in
-                   ("id", "scenario", "http_status", "result", "reason")) + "</tr>"
+                   ("id", "scenario", "http_status", "result", "failure_type", "reason")) + "</tr>"
                    for r in state["results"])
     page = ("<!doctype html><html><head><meta charset='utf-8'><title>Petstore API Agent</title>"
             "<style>body{font:15px system-ui;margin:32px}table{border-collapse:collapse;width:100%}"
             "td,th{padding:10px;border:1px solid #ccc;text-align:left}pre{white-space:pre-wrap}</style>"
             "</head><body><h1>Petstore API Agent Report</h1><table><tr>"
-            "<th>ID</th><th>Scenario</th><th>HTTP</th><th>Verdict</th><th>Evidence</th></tr>"
+            "<th>ID</th><th>Scenario</th><th>HTTP</th><th>Verdict</th><th>Failure type</th><th>Evidence</th></tr>"
             + rows + "</table><h2>LLM failure analysis</h2><pre>" + html.escape(state["summary"])
             + "</pre></body></html>")
     (OUT / "report.html").write_text(page, encoding="utf-8")
@@ -187,7 +194,8 @@ def main():
     graph.add_edge("publish_report", END)
     result = graph.compile().invoke({})
     for r in result["results"]:
-        print(f"{r['id']:8} {r['result']:5} HTTP {str(r.get('http_status', '-')):3} {r['scenario']}: {r['reason']}")
+        kind = r.get("failure_type", "")
+        print(f"{r['id']:8} {r['result']:5} HTTP {str(r.get('http_status', '-')):3} {r['scenario']}: {r['reason']} {kind}")
     print("Reports: reports/results.json and reports/report.html")
     raise SystemExit(1 if any(r["result"] == "FAIL" for r in result["results"]) else 0)
 
