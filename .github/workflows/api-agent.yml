@@ -2,6 +2,14 @@ name: Petstore API Testing Agent
 
 on:
   workflow_dispatch:
+    inputs:
+      mode:
+        description: 'Strict quality gate or exploratory demo run'
+        type: choice
+        options:
+          - strict
+          - exploratory
+        default: strict
 
 permissions:
   contents: read
@@ -16,6 +24,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 10
     env:
+      AGENT_MODE: ${{ inputs.mode }}
       PETSTORE_BASE_URL: https://petstore3.swagger.io/api/v3
       OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
       OPENAI_MODEL: gpt-4.1-mini
